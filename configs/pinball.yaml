@@ -1,0 +1,124 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# FEM conv Pinball sweep v3 — unified train.py, multires eval guaranteed
+# ═══════════════════════════════════════════════════════════════════════════
+# Grid: train_window (3) x fem_radius_mult (2) = 6 runs
+#
+# Uses unified train.py (--domain pinball).
+# Post-training multires eval is activated via --multires_eval_windows.
+#
+# Full Pinball hierarchy (finest -> coarsest):
+#   orig(7525) lc_250(7384) lc_300(5266) lc_500(1934)
+#   lc_1000(557) lc_2000(226) lc_4000(140)
+# ═══════════════════════════════════════════════════════════════════════════
+
+program: train.py
+method: grid
+metric:
+  name: train/epoch_loss
+  goal: minimize
+
+parameters:
+
+  # ── Sweep axes ──────────────────────────────────────────────────────────
+  fem_radius_mult:
+    values: [2.0] #, 3.0]
+
+  train_window:
+    values:
+      - "orig,lc_500_kNN,lc_2000_kNN"
+      - "orig,lc_1000_kNN,lc_4000_kNN"
+      - "lc_500_kNN,lc_1000_kNN,lc_4000_kNN"
+
+  # ── Post-training multi-resolution eval ─────────────────────────────────
+  # 4 windows: same-window, shifted-mesh, wider-spacing, all-coarse
+  multires_eval_windows:
+    value: "orig,lc_500_kNN,lc_2000_kNN;lc_250_kNN,lc_500_kNN,lc_2000_kNN;orig,lc_1000_kNN,lc_4000_kNN;lc_500_kNN,lc_1000_kNN,lc_4000_kNN"
+
+  # ── FEM conv architecture ───────────────────────────────────────────────
+  conv_type:
+    value: multiscale
+  layer_type:
+    value: fem_conv
+  fem_basis_type:
+    value: p1
+  fem_use_radius:
+    value: true
+  fem_k_hops:
+    value: 2
+  mixing_type:
+    value: vector
+  res_invariant:
+    value: true
+  use_edge_geom:
+    value: true
+  use_pos_reinject:
+    value: true
+  pooling_type:
+    value: learned_res
+  hidden_dim:
+    value: 128
+  num_layers:
+    value: 4
+  use_latent_transformer:
+    value: true
+  n_transformer_blocks:
+    value: 4
+  n_transformer_heads:
+    value: 4
+  film_time_cond:
+    value: true
+  enc_use_mu:
+    value: true
+  enc_use_time:
+    value: true
+
+  # ── SDE (VE/EDM) ────────────────────────────────────────────────────────
+  sde_type:
+    value: ve
+  sigma_data:
+    value: 0.5
+  P_mean:
+    value: -1.2
+  P_std:
+    value: 1.2
+
+  # ── Domain ──────────────────────────────────────────────────────────────
+  domain:
+    value: pinball
+
+  # ── Training ────────────────────────────────────────────────────────────
+  num_samples:
+    value: 12000
+  batch_size:
+    value: 8
+  num_epochs:
+    value: 100
+  vis_every:
+    value: 10
+  gen_eval_every:
+    value: 25
+  lr:
+    value: 0.001
+  noise_scale:
+    value: 0.1
+  noise_eps:
+    value: 0.01
+  use_accel_sampler:
+    value: true
+
+  # ── Cluster paths ───────────────────────────────────────────────────────
+  # ms_base_dir is used as the pinball data directory (contains Pinball_Ytrain.pt etc.)
+  ms_base_dir:
+    value: data/Pinball
+  save_dir:
+    value: ./exp
+
+command:
+  - python
+  - ${program}
+  - ${args}
+  - --use_wandb
+  - --wandb_sweep
+  - --eval_res_invar=True
+
+project: pinball_fem_conv_sweep_v3

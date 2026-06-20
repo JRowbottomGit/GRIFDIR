@@ -1,0 +1,125 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Multi-domain conductivity sweep: FEM conv vs MP-PDE
+# ═══════════════════════════════════════════════════════════════════════════
+# Joint training across 8 conductivity domains (Gaussian blob distributions)
+# with domain-specific cross-attention encoder/decoder heads at bottleneck.
+#
+# Domains (8 total, 1000 samples each after capping):
+#   circle, circle_with_hole, e_shape, l_shape (maxh0.1),
+#   plus, square (capped from 10k to 1k), square_with_hole, x_shape
+#
+# Note: l_shape uses maxh0.100_n1000 (proper L-domain sampling).
+#       The maxh0.05_n5000 variant has biased unit-square-only blob centres.
+#       square is capped to 1000 via max_samples_per_domain for balance.
+#
+# Grid: layer_type (2) x hidden_dim (2) = 4 runs
+# ═══════════════════════════════════════════════════════════════════════════
+
+program: train.py
+method: grid
+metric:
+  name: train/epoch_loss
+  goal: minimize
+
+parameters:
+
+  # ── Sweep axes ──────────────────────────────────────────────────────────
+  layer_type:
+    values:
+      - fem_conv
+      - simple_mp
+
+  hidden_dim:
+    values: [128]
+
+  # ── Domain setup ────────────────────────────────────────────────────────
+  domain:
+    value: multidomain
+  domains:
+    value: "circle,circle_with_hole,e_shape,l_shape,plus,square,square_with_hole,x_shape"
+  max_samples_per_domain:
+    value: 1000
+
+  # ── Domain heads + transformer ──────────────────────────────────────────
+  use_domain_heads:
+    value: true
+  n_latent:
+    value: 100
+  n_domains:
+    value: 8
+  use_latent_transformer:
+    value: true
+  n_transformer_blocks:
+    value: 4
+  n_transformer_heads:
+    value: 4
+
+  # ── Architecture ────────────────────────────────────────────────────────
+  conv_type:
+    value: multiscale
+  num_layers:
+    value: 4
+  fem_basis_type:
+    value: p1
+  fem_k_hops:
+    values: [2, 3]
+  mixing_type:
+    value: vector
+  use_edge_geom:
+    value: true
+  pooling_type:
+    value: learned_res
+  film_time_cond:
+    value: true
+  use_pos_reinject:
+    value: true
+  res_invariant:
+    values: [true, false]
+  fem_use_radius:
+    values: [true, false]
+  fem_radius_mult:
+    values: [2.0, 3.0]
+
+  # ── SDE (VE/EDM) ────────────────────────────────────────────────────────
+  sde_type:
+    value: ve
+  sigma_data:
+    value: 0.5
+  P_mean:
+    value: -1.2
+  P_std:
+    value: 1.2
+
+  # ── Training ────────────────────────────────────────────────────────────
+  batch_size:
+    value: 8 #16
+  num_epochs:
+    value: 500
+  vis_every:
+    value: 25
+  gen_eval_every:
+    value: 0
+  lr:
+    value: 0.001
+  noise_scale:
+    value: 0.3
+  noise_eps:
+    value: 0.01
+  use_accel_sampler:
+    value: false
+
+  # ── Cluster paths ───────────────────────────────────────────────────────
+  save_dir:
+    value: ./exp/multidomain
+  data_dir:
+    value: ./data
+
+command:
+  - python
+  - ${program}
+  - ${args}
+  - --use_wandb
+  - --wandb_sweep
+  - --eval_res_invar=True
+
+project: multidomain_conductivity_sweep

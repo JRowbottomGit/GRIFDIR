@@ -1,0 +1,157 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Gaussian Blob baseline comparison — square domain
+# ═══════════════════════════════════════════════════════════════════════════
+# All fig-3 models in one sweep — the per-baseline args below are non-overlapping,
+# only the active layer_type's are read:
+#
+#   layer_type=fem_conv,  res_invariant=true   → GRIFDIR (ours; generalises)
+#   layer_type=simple_mp, res_invariant=true   → MP-GNN, res-invariant
+#   layer_type=simple_mp, res_invariant=false  → MP-GNN, non-generalising
+#   layer_type=fno,       res_invariant=false  → FNO discrete baseline
+#   layer_type=cnn,       res_invariant=false  → CNN/UNet discrete baseline
+#   layer_type=gaot,      res_invariant=false  → GAOT baseline
+#
+# Grid: layer_type (5) × res_invariant (2) = 10 runs. res_invariant is ignored by
+# the fno/cnn/gaot code paths, so their res_inv=true runs harmlessly duplicate the
+# false ones. GAOT is folded in here (was a separate debug sweep) with the
+# paper-correct latent_tokens_size=64×64 and magno_radius=0.033.
+# ═══════════════════════════════════════════════════════════════════════════
+
+program: train.py
+method: grid
+metric:
+  name: train/epoch_loss
+  goal: minimize
+
+parameters:
+
+  # ── Sweep axes ────────────────────────────────────────────────────────────
+  layer_type:
+    values: [fem_conv, simple_mp, fno, cnn, gaot]
+
+  res_invariant:
+    values: [false, true]
+
+  # ── GNN geometry features (best known config for res-invariant GNN) ───────
+  use_edge_geom:
+    value: true
+  use_pos_reinject:
+    value: false
+
+  # ── GNN architecture ──────────────────────────────────────────────────────
+  conv_type:
+    value: multiscale
+  hidden_dim:
+    value: 128
+  num_layers:
+    value: 4
+  use_latent_transformer:
+    value: true
+  n_transformer_blocks:
+    value: 4
+  n_transformer_heads:
+    value: 4
+  pooling_type:
+    value: learned_res
+  mixing_type:
+    value: vector
+
+  # ── FNO settings (ignored for GNN/CNN) ───────────────────────────────────
+  fno_n_modes:
+    value: 8
+  fno_n_layers:
+    value: 4
+
+  # ── CNN settings (ignored for GNN/FNO) ───────────────────────────────────
+  cnn_double_conv:
+    value: false
+  cnn_residual:
+    value: true
+  cnn_bottleneck_attn:
+    value: true
+  cnn_strided_down:
+    value: false
+  cnn_dropout:
+    value: 0.0
+
+  # ── GAOT settings (ignored for GNN/CNN/FNO) — paper-correct knobs ─────────
+  gaot_latent_tokens_size:
+    value: "64,64"
+  gaot_magno_radius:
+    value: 0.033
+  gaot_patch_size:
+    value: 2
+  gaot_n_transformer_layers:
+    value: 3
+  gaot_magno_hidden:
+    value: 64
+  gaot_magno_mlp_layers:
+    value: 3
+  gaot_magno_lifting:
+    value: 64
+  gaot_positional_embedding:
+    value: absolute
+  gaot_use_geoembed:
+    value: true
+  gaot_use_attention:
+    value: true
+
+  # ── SDE (VE/EDM) ──────────────────────────────────────────────────────────
+  sde_type:
+    value: ve
+  sigma_data:
+    value: 0.5
+  P_mean:
+    value: -1.2
+  P_std:
+    value: 1.2
+  sigma_min:
+    value: 0.001
+  sigma_max:
+    value: 40.0
+
+  # ── Domain ────────────────────────────────────────────────────────────────
+  domain:
+    value: square
+
+  # ── Data ──────────────────────────────────────────────────────────────────
+  nx:
+    value: 32
+  ny:
+    value: 32
+  num_samples:
+    value: 5000
+  noise_scale:
+    value: 0.1
+  noise_eps:
+    value: 0.01
+
+  # ── Training ──────────────────────────────────────────────────────────────
+  batch_size:
+    value: 32
+  num_epochs:
+    value: 250
+  lr:
+    value: 0.001
+  vis_every:
+    value: 50
+  gen_eval_every:
+    value: 125
+  use_accel_sampler:
+    value: true
+
+  # ── Cluster paths ─────────────────────────────────────────────────────────
+  data_dir:
+    value: ./data
+  save_dir:
+    value: ./exp
+
+command:
+  - python
+  - ${program}
+  - ${args}
+  - --use_wandb
+  - --wandb_sweep
+  - --eval_res_invar=True
+
+project: gaussian_blob_baseline_sweep

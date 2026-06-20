@@ -1,0 +1,16 @@
+# Runtime dependencies for training + evaluation (torch-only path).
+# Data generation additionally needs the conda-only FEniCSx stack — see environment.yml.
+torch
+torch-geometric
+omegaconf
+ema-pytorch
+wandb
+numpy
+scipy
+matplotlib
+tqdm
+
+# Optional baselines — imported from upstream, not vendored (install only to run them):
+#   FNO  (--layer_type fno)  -> pip install neuraloperator
+#   GAOT (--layer_type gaot) -> clone https://github.com/camlab-ethz/GAOT,
+#                               set GAOT_REPO, pip install rotary-embedding-torch

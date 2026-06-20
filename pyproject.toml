@@ -1,0 +1,61 @@
+# Project metadata, dependencies, and tool configuration.
+#
+# Editable install (recommended for a clone) — pulls deps + puts the package on path:
+#     pip install -e .
+# Or just the deps, running from the repo root:
+#     pip install -r requirements.txt
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grifdir"
+version = "0.1.0"
+description = "Graph Resolution-Invariant FEM Diffusion Models in Function Spaces over Irregular Domains"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "James Rowbottom" },
+    { name = "Elizabeth L. Baker" },
+    { name = "Nick Huang" },
+    { name = "Ben Adcock" },
+    { name = "Carola-Bibiane Schönlieb" },
+    { name = "Alexander Denker" },
+]
+dependencies = [
+    "torch",
+    "torch-geometric",
+    "omegaconf",
+    "ema-pytorch",
+    "wandb",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]           # test suite
+# Baseline operators are imported from their upstream sources, not vendored.
+fno = ["neuraloperator"]   # FNO baseline (models/fno.py)
+# GAOT baseline (models/gaot.py) is not pip-installable: clone
+# https://github.com/camlab-ethz/GAOT, set GAOT_REPO, and pip install rotary-embedding-torch.
+
+[project.urls]
+Paper = "https://arxiv.org/abs/2605.03497"
+Repository = "https://github.com/JRowbottomGit/GRIFDIR"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Flat layout: name the importable library explicitly so setuptools doesn't try to
+# auto-discover packages from figures/ data_tools/ data/ checkpoints/ etc.
+[tool.setuptools]
+py-modules = ["config", "model_mesh_utils", "data_utils"]
+packages = ["models", "diffusion", "pde_operators", "eval"]

@@ -1,0 +1,23 @@
+# Conda environment for DATA GENERATION only (FEniCSx / dolfinx stack).
+# Training and evaluation do not need this — use `pip install -r requirements.txt`
+# (see README). Only `scripts/generate_*.py` require dolfinx.
+name: grifdir-datagen
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - fenics-dolfinx
+  - mpich
+  - mpi4py
+  - petsc4py
+  - pytorch
+  - numpy
+  - scipy
+  - matplotlib
+  - tqdm
+  - pip
+  - pip:
+      - torch-geometric
+      - omegaconf
+      - wandb
+      - ema-pytorch

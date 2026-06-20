@@ -1,0 +1,126 @@
+model:
+  model_type: C
+  precond_last_layer: true
+  hidden_dim: 128
+  time_dim: 128
+  num_layers: 4
+  conv_type: multiscale
+  heads: 4
+  dropout: 0.0
+  time_embedding: fourier
+  time_embedding_scale: 16.0
+  use_latent_transformer: true
+  n_transformer_blocks: 4
+  n_transformer_heads: 4
+  pooling_type: learned_res
+  use_pos_reinject: true
+  use_edge_geom: true
+  layer_type: fem_conv
+  lap_pe_dim: 0
+  n_gps_heads: 4
+  mixing_type: vector
+  fem_basis_type: p1
+  fem_k_hops: 2
+  fem_use_radius: true
+  fem_radius_mult: 2.0
+  knn_radius_mult: 3.0
+  fno_n_modes: 16
+  fno_n_layers: 4
+  cnn_double_conv: false
+  cnn_residual: false
+  cnn_bottleneck_attn: false
+  cnn_strided_down: false
+  cnn_dropout: 0.0
+  film_time_cond: true
+  res_invariant: true
+  use_domain_heads: false
+  n_latent: 100
+  n_domains: 8
+sde:
+  sde_type: ve
+  beta_min: 0.001
+  beta_max: 15.0
+  sigma_min: 0.001
+  sigma_max: 40.0
+  P_mean: -1.2
+  P_std: 1.2
+  sigma_data: 0.5
+noise:
+  scale: 0.1
+  eps: 0.01
+data:
+  nx: 32
+  ny: 32
+  num_samples: 12000
+  max_numInc: 3
+  backCond: 1.0
+  data_dir: data
+  domain: pinball
+  domains: ''
+  max_samples_per_domain: 0
+  ms_base_dir: data/Pinball
+  ms_finest_dir: data/Pinball
+  ms_res_dirs: lc_1000_kNN,lc_4000_kNN
+  ms_all_res_dirs: lc_1000_kNN,lc_2000_kNN,lc_4000_kNN
+  n_cond_channels: 0
+  enc_use_mu: false
+  enc_use_time: false
+  land_mask_path: ''
+  knn_k: 0
+  hierarchy_path: ''
+training:
+  num_epochs: 100
+  lr: 0.001
+  batch_size: 8
+  save_dir: exp
+  log_wandb: false
+  use_wandb: false
+  wandb_entity: ""
+  wandb_project: grifdir
+  num_workers: 4
+  pin_memory: false
+  persistent_workers: false
+  use_amp: false
+  use_accel_sampler: true
+  data_config: baseline
+  vis_every: 10
+  ckpt_every: 50
+  gen_eval_every: 25
+  area_weighted_loss: false
+  multires_eval_specs:
+  - name: orig-lc_500_kNN-lc_2000_kNN
+    ms_finest_dir: data/Pinball
+    ms_res_dirs:
+    - lc_500_kNN
+    - lc_2000_kNN
+    ms_all_res_dirs:
+    - lc_500_kNN
+    - lc_1000_kNN
+    - lc_2000_kNN
+  - name: lc_250_kNN-lc_500_kNN-lc_2000_kNN
+    ms_finest_dir: data/Pinball/lc_250_kNN
+    ms_res_dirs:
+    - lc_500_kNN
+    - lc_2000_kNN
+    ms_all_res_dirs:
+    - lc_500_kNN
+    - lc_1000_kNN
+    - lc_2000_kNN
+  - name: orig-lc_1000_kNN-lc_4000_kNN
+    ms_finest_dir: data/Pinball
+    ms_res_dirs:
+    - lc_1000_kNN
+    - lc_4000_kNN
+    ms_all_res_dirs:
+    - lc_1000_kNN
+    - lc_2000_kNN
+    - lc_4000_kNN
+  - name: lc_500_kNN-lc_1000_kNN-lc_4000_kNN
+    ms_finest_dir: data/Pinball/lc_500_kNN
+    ms_res_dirs:
+    - lc_1000_kNN
+    - lc_4000_kNN
+    ms_all_res_dirs:
+    - lc_1000_kNN
+    - lc_2000_kNN
+    - lc_4000_kNN

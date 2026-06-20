@@ -1,0 +1,56 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the paper below."
+title: "GRIFDIR: Graph Resolution-Invariant FEM Diffusion Models in Function Spaces over Irregular Domains"
+authors:
+  - family-names: Rowbottom
+    given-names: James
+  - family-names: Baker
+    given-names: Elizabeth L.
+  - family-names: Huang
+    given-names: Nick
+  - family-names: Adcock
+    given-names: Ben
+  - family-names: Schönlieb
+    given-names: Carola-Bibiane
+  - family-names: Denker
+    given-names: Alexander
+repository-code: "https://github.com/JRowbottomGit/GRIFDIR"
+url: "https://arxiv.org/abs/2605.03497"
+preferred-citation:
+  type: article
+  title: "GRIFDIR: Graph Resolution-Invariant FEM Diffusion Models in Function Spaces over Irregular Domains"
+  year: 2026
+  url: "https://arxiv.org/abs/2605.03497"
+  authors:
+    - family-names: Rowbottom
+      given-names: James
+    - family-names: Baker
+      given-names: Elizabeth L.
+    - family-names: Huang
+      given-names: Nick
+    - family-names: Adcock
+      given-names: Ben
+    - family-names: Schönlieb
+      given-names: Carola-Bibiane
+    - family-names: Denker
+      given-names: Alexander
+references:
+  - type: dataset
+    title: "GRIFDIR datasets: Gaussian-blob & multidomain conductivity + pinball flow tensors"
+    authors:
+      - family-names: Rowbottom
+        given-names: James
+      - family-names: Baker
+        given-names: Elizabeth L.
+      - family-names: Huang
+        given-names: Nick
+      - family-names: Adcock
+        given-names: Ben
+      - family-names: Schönlieb
+        given-names: Carola-Bibiane
+      - family-names: Denker
+        given-names: Alexander
+    doi: "10.5281/zenodo.20753300"
+    publisher:
+      name: Zenodo
+    year: 2026

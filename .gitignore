@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Datasets (download from Zenodo or regenerate). Committed meshes/ + checkpoint are kept.
+data/
+
+# Experiment outputs, checkpoints, logs
+exp*/
+plot_validation/
+wandb/
+*.out
+slurm-*.out
+logs/
+
+# Checkpoint dirs ship: config.yaml + model_ema_latest.pt + the rendered PNG figures.
+# Heavy / regenerable formats (sample tensors, vector PDFs, metric JSON) are NOT committed.
+checkpoints/**/*.pt
+checkpoints/**/*.pdf
+checkpoints/**/*.json
+!checkpoints/*/model_ema_latest.pt
+
+# Local checkpoint backups (never published)
+.backups/
+
+# Local environments
+.venv/
+venv/
