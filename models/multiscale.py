@@ -1,4 +1,5 @@
 import math
+import numpy as np
 import torch
 import torch.nn as nn
 from torch_geometric.nn import MessagePassing
@@ -7,7 +8,7 @@ from diffusion.embedding import SinusoidalTimeEmbedding, FourierTimeEmbedding
 # Baseline conv layers (PNA / GPS / SplineCNN / MoNet / circular / periodic-MLP)
 # are not part of this release — only the FEM-conv layer ships.
 from models.fem_conv import (
-    FEMConvLayer, _compute_khop_edges, _compute_knn_edges
+    FEMConvLayer, _compute_khop_edges, _compute_knn_edges, _compute_cut_cell_edges
 )
 
 
@@ -205,6 +206,130 @@ class LatentTransformerProcessor(nn.Module):
         return self.final_norm(x)
 
 
+def _interp_matrix(src, dst):
+    """Sparse [len(dst), len(src)] piecewise-linear interpolation: barycentric weights in
+    the Delaunay simplex of the src points containing each dst point. A dst point outside
+    their hull (a fine node nearer the boundary than any coarse node) is extrapolated
+    from the simplex at its nearest src point whose smallest barycentric weight is
+    largest. Rows sum to 1; linear fields are reproduced exactly everywhere."""
+    from scipy.spatial import Delaunay, cKDTree
+    src = np.asarray(src, dtype=np.float64)
+    dst = np.asarray(dst, dtype=np.float64)
+    d = src.shape[1]
+    tri = Delaunay(src)
+    s = tri.find_simplex(dst)
+    ins = np.nonzero(s >= 0)[0]
+    T = tri.transform[s[ins]]                                   # [M, d+1, d]
+    b = np.einsum('mij,mj->mi', T[:, :d], dst[ins] - T[:, d])
+    rows = [np.repeat(ins, d + 1)]
+    cols = [tri.simplices[s[ins]].ravel()]
+    vals = [np.c_[b, 1 - b.sum(1)].ravel()]
+    out = np.nonzero(s < 0)[0]
+    if len(out):
+        incident = [[] for _ in range(len(src))]
+        for k, simplex in enumerate(tri.simplices):
+            for v in simplex:
+                incident[v].append(k)
+        for p, v in zip(out, cKDTree(src).query(dst[out])[1]):
+            ks = np.asarray(incident[v])
+            Tk = tri.transform[ks]
+            bk = np.einsum('kij,kj->ki', Tk[:, :d], dst[p] - Tk[:, d])
+            bary = np.c_[bk, 1 - bk.sum(1)]
+            best = int(np.argmax(np.nan_to_num(bary.min(1), nan=-np.inf)))   # never a flat simplex if another exists
+            rows.append(np.full(d + 1, p))
+            cols.append(tri.simplices[ks[best]])
+            vals.append(bary[best])
+    rows, cols, vals = np.concatenate(rows), np.concatenate(cols), np.concatenate(vals)
+    bad = np.unique(rows[~np.isfinite(vals)])
+    if len(bad):
+        # A flat simplex (lattice-like node patches, 3D brackets) has no barycentric transform, so
+        # its weights are NaN: those dst points copy their nearest src point instead.
+        import warnings
+        warnings.warn(f"_interp_matrix: {len(bad)} of {len(dst)} points lie in flat simplices; "
+                      f"copied from the nearest coarse point")
+        keep = ~np.isin(rows, bad)
+        rows = np.r_[rows[keep], bad]
+        cols = np.r_[cols[keep], cKDTree(src).query(dst[bad])[1]]
+        vals = np.r_[vals[keep], np.ones(len(bad))]
+    idx = torch.from_numpy(np.stack([rows, cols]))
+    return torch.sparse_coo_tensor(idx, torch.from_numpy(vals).float(),
+                                   (len(dst), len(src))).coalesce()
+
+
+def _points_in_mesh(pts, xy, cells, k=16):
+    """True where a 2D point lies in one of the triangles xy[cells] (so not in a hole)."""
+    from scipy.spatial import cKDTree
+    tri = xy[cells]                                                     # [T, 3, 2]
+    k = min(k, len(cells))
+    cand = cKDTree(tri.mean(1)).query(pts, k=k)[1].reshape(len(pts), k)
+    t = tri[cand]                                                       # [P, k, 3, 2]
+    a, b = t[..., 1, :] - t[..., 0, :], t[..., 2, :] - t[..., 0, :]
+    p = pts[:, None] - t[..., 0, :]
+    den = a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
+    u = (p[..., 0] * b[..., 1] - p[..., 1] * b[..., 0]) / den
+    v = (a[..., 0] * p[..., 1] - a[..., 1] * p[..., 0]) / den
+    return ((u >= -1e-9) & (v >= -1e-9) & (u + v <= 1 + 1e-9)).any(1)
+
+
+def _interp_matrix_in_domain(src, dst, domain, parent):
+    """_interp_matrix for a domain with holes (vertex-centred meshes such as
+    pinball; with unpool_in_domain the cell-centred blob meshes too). Delaunay simplices of
+    the src points that leave the domain (centroid or an edge midpoint outside
+    domain = (xy, cells) of the finest mesh) are dropped, so a fine
+    node beside a hole never mixes coarse values from across it. A dst point outside every
+    kept simplex is extrapolated from a kept simplex at one of its nearest src points, as
+    in _interp_matrix; with none there it copies parent[p]. Rows sum to 1."""
+    from scipy.spatial import Delaunay, cKDTree
+    src = np.asarray(src, dtype=np.float64)[:, :2]
+    dst = np.asarray(dst, dtype=np.float64)[:, :2]
+    xy0 = np.asarray(domain[0], dtype=np.float64)[:, :2]
+    cells0 = np.asarray(domain[1])
+    tri = Delaunay(src)
+    S = src[tri.simplices]                                              # [K, 3, 2]
+    probes = np.concatenate([S.mean(1, keepdims=True), 0.5 * (S + np.roll(S, 1, axis=1))], axis=1)
+    keep = _points_in_mesh(probes.reshape(-1, 2), xy0, cells0).reshape(len(S), 4).all(1)
+    s = tri.find_simplex(dst)
+    ins = np.nonzero(s >= 0)[0]
+    ins = ins[keep[s[ins]]]
+    T = tri.transform[s[ins]]
+    b = np.einsum('mij,mj->mi', T[:, :2], dst[ins] - T[:, 2])
+    rows, cols, vals = [np.repeat(ins, 3)], [tri.simplices[s[ins]].ravel()], [np.c_[b, 1 - b.sum(1)].ravel()]
+    out = np.setdiff1d(np.arange(len(dst)), ins)
+    if len(out):
+        incident = [[] for _ in range(len(src))]
+        for k in np.nonzero(keep)[0]:
+            for v in tri.simplices[k]:
+                incident[v].append(k)
+        nn = cKDTree(src).query(dst[out], k=min(4, len(src)))[1].reshape(len(out), -1)
+        for p, cand in zip(out, nn):
+            ks = next((np.asarray(incident[v]) for v in cand if incident[v]), None)
+            if ks is None:
+                rows.append([p]); cols.append([int(parent[p])]); vals.append([1.0])
+                continue
+            Tk = tri.transform[ks]
+            bk = np.einsum('kij,kj->ki', Tk[:, :2], dst[p] - Tk[:, 2])
+            bary = np.c_[bk, 1 - bk.sum(1)]
+            best = int(np.argmax(bary.min(1)))
+            rows.append(np.full(3, p)); cols.append(tri.simplices[ks[best]]); vals.append(bary[best])
+    idx = torch.from_numpy(np.stack([np.concatenate(rows), np.concatenate(cols)]).astype(np.int64))
+    return torch.sparse_coo_tensor(idx, torch.from_numpy(np.concatenate(vals).astype(np.float32)),
+                                   (len(dst), len(src))).coalesce()
+
+
+def _prolong(h_coarse, unpool_map, device):
+    """Coarse -> fine values, [B, N_coarse, H] -> [B, N_fine, H]: copy each fine node's
+    parent (unpool_map an index per fine node) or interpolate (unpool_map a sparse
+    [N_fine, N_coarse] matrix, from unpool_interp)."""
+    B, n_coarse, H = h_coarse.shape
+    if unpool_map.is_sparse:
+        flat = h_coarse.permute(1, 0, 2).reshape(n_coarse, B * H)
+        return torch.sparse.mm(unpool_map.to(device), flat).reshape(-1, B, H).permute(1, 0, 2)
+    umap = unpool_map.to(device)
+    off = torch.arange(B, device=device) * n_coarse
+    idx = (umap.unsqueeze(0) + off.unsqueeze(1)).reshape(-1)
+    return h_coarse.reshape(-1, H)[idx].reshape(B, -1, H)
+
+
 class LearnedPool(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
@@ -247,16 +372,7 @@ class LearnedUnpool(nn.Module):
         )
 
     def forward(self, h_coarse, h_fine_skip, unpool_map, device):
-        B, N_fine, H = h_fine_skip.shape
-        N_coarse = h_coarse.shape[1]
-        umap = unpool_map.to(device)
-
-        h_flat = h_coarse.reshape(-1, H)
-        h_messages = self.message_net(h_flat)
-        off = torch.arange(B, device=device) * N_coarse
-        idx = (umap.unsqueeze(0) + off.unsqueeze(1)).reshape(-1)
-        h_bc = h_messages[idx].reshape(B, N_fine, H)
-
+        h_bc = _prolong(self.message_net(h_coarse), unpool_map, device)
         return self.combine_net(torch.cat([h_bc, h_fine_skip], dim=-1))
 
 
@@ -274,15 +390,7 @@ class LearnedResUnpool(nn.Module):
         )
 
     def forward(self, h_coarse, h_fine_skip, unpool_map, device):
-        B, N_fine, H = h_fine_skip.shape
-        N_coarse = h_coarse.shape[1]
-        umap = unpool_map.to(device)
-
-        h_flat = self.message_net(h_coarse.reshape(-1, H))
-        off = torch.arange(B, device=device) * N_coarse
-        idx = (umap.unsqueeze(0) + off.unsqueeze(1)).reshape(-1)
-        h_bc = h_flat[idx].reshape(B, N_fine, H)
-
+        h_bc = _prolong(self.message_net(h_coarse), unpool_map, device)
         return h_bc + self.correction_net(torch.cat([h_bc, h_fine_skip], dim=-1))
 
 
@@ -315,7 +423,9 @@ class SimpleMP(MessagePassing):
 class MPBlock(nn.Module):
     def __init__(self, hidden_dim, num_layers, edge_dim=0, layer_type='simple_mp',
                  n_gps_heads=4, avg_deg=6.0, mixing_type='vector', fem_basis_type='p1',
-                 fem_k_hops=2, knn_radius_mult=3.0, fem_lumped_mass=False):
+                 fem_k_hops=2, knn_radius_mult=3.0, fem_lumped_mass=False,
+                 fem_cut_cell=False, fem_lumped_norm=False,
+                 fem_wall_signal=False, fem_lumped_ball_norm=False):
         super().__init__()
         self.layer_type = layer_type
         if layer_type in ('fem_conv', 'knn_conv'):
@@ -325,7 +435,9 @@ class MPBlock(nn.Module):
             self.layers = nn.ModuleList([
                 FEMConvLayer(hidden_dim, edge_dim=edge_dim, mixing_type=mixing_type,
                              fem_basis_type=fem_basis_type, k_hops=_khops,
-                             lumped_mass=fem_lumped_mass)
+                             lumped_mass=fem_lumped_mass,
+                             cut_cell=fem_cut_cell, lumped_norm=fem_lumped_norm,
+                             wall_signal=fem_wall_signal, ball_norm=fem_lumped_ball_norm)
                 for _ in range(num_layers)
             ])
         else:
@@ -362,9 +474,29 @@ class MultiscaleGNNScoreNetwork(nn.Module):
                  use_domain_heads=False,
                  n_latent=100,
                  n_domains=8,
+                 fem_cut_cell=False,
+                 unpool_interp=False,
+                 unpool_in_domain=False,
+                 fem_lumped_norm=False,
+                 fem_wall_signal=False,
+                 fem_lumped_ball_norm=False,
                  num_layers=None, conv_type=None, heads=None, dropout=0.0,
                  learned_pool=None):
         super().__init__()
+        if unpool_in_domain and not unpool_interp:
+            raise ValueError("unpool_in_domain needs unpool_interp=True")
+        if fem_cut_cell and not (layer_type == 'fem_conv' and fem_use_radius
+                                 and fem_lumped_mass):
+            raise ValueError("fem_cut_cell needs layer_type='fem_conv', fem_use_radius=True, "
+                             "fem_lumped_mass=True and a 2D triangle mesh")
+        if fem_lumped_norm and not fem_lumped_mass:
+            raise ValueError("fem_lumped_norm needs fem_lumped_mass=True")
+        if fem_wall_signal and not (fem_lumped_mass and fem_use_radius):
+            raise ValueError("fem_wall_signal needs fem_lumped_mass=True and fem_use_radius=True")
+        if fem_lumped_ball_norm and not (fem_lumped_mass and fem_use_radius):
+            raise ValueError("fem_lumped_ball_norm needs fem_lumped_mass=True and fem_use_radius=True")
+        if fem_lumped_ball_norm and fem_lumped_norm:
+            raise ValueError("fem_lumped_norm and fem_lumped_ball_norm are alternatives; pick one")
         if learned_pool is not None:
             pooling_type = 'learned_pool' if learned_pool else 'false'
         if pooling_type not in ('false', 'learned_pool', 'learned_res'):
@@ -385,6 +517,12 @@ class MultiscaleGNNScoreNetwork(nn.Module):
         self.fem_radius_mult = fem_radius_mult
         self.fem_lumped_mass = fem_lumped_mass
         self.res_invariant = res_invariant
+        self.fem_cut_cell = fem_cut_cell     # radius stencil weighted by each cell's area inside the ball
+        self.unpool_interp = unpool_interp   # unpool by linear interpolation, not copy-to-children
+        self.unpool_in_domain = unpool_in_domain   # cell-centred meshes too: no weight across a hole or notch
+        self.fem_lumped_norm = fem_lumped_norm   # lumped sum / the ball's area inside the domain
+        self.fem_wall_signal = fem_wall_signal   # learned vector x the share of the ball outside the domain
+        self.fem_lumped_ball_norm = fem_lumped_ball_norm   # lumped sum / the full ball's area
         # Lumped-mass mode appends source-node dual-cell area as an extra
         # edge_attr column, so edge_dim grows by 1 when active.
         _edge_dim = (3 if use_edge_geom else 0) + (1 if fem_lumped_mass else 0)
@@ -409,7 +547,11 @@ class MultiscaleGNNScoreNetwork(nn.Module):
                              fem_basis_type=fem_basis_type,
                              fem_k_hops=fem_k_hops,
                              knn_radius_mult=knn_radius_mult,
-                             fem_lumped_mass=fem_lumped_mass)
+                             fem_lumped_mass=fem_lumped_mass,
+                             fem_cut_cell=fem_cut_cell,
+                             fem_lumped_norm=fem_lumped_norm,
+                             fem_wall_signal=fem_wall_signal,
+                             fem_lumped_ball_norm=fem_lumped_ball_norm)
         if res_invariant:
             # Shared weights across all levels + per-level FiLM on resolution
             self.shared_down_gnn = MPBlock(hidden_dim, n_gnn_layers_per_level, **_block_kwargs)
@@ -502,6 +644,8 @@ class MultiscaleGNNScoreNetwork(nn.Module):
         self._precomp_edge_indices = None  # precomputed per level for fem_conv/knn_conv
         self._knn_radius_mult = knn_radius_mult
         self._level_log_areas = None  # [n_levels] log(mean cell area) per level
+        self._cut_cell_attr = None         # per level, [E_l, d+1+n_geo+1] (fem_cut_cell)
+        self._unpool_P = None              # per level, sparse [N_l, N_{l+1}] (unpool_interp)
 
     def _all_mp_blocks(self):
         """Yield all MPBlock instances (shared or per-level)."""
@@ -530,6 +674,9 @@ class MultiscaleGNNScoreNetwork(nn.Module):
         self._unpool_maps = unpool_maps
         self._level_coords = level_coords
         self._lap_pe = lap_pe   # list of [N_l, k] tensors, one per level (or None)
+        self._cut_cell_attr = [] if self.fem_cut_cell else None   # filled per level below
+        if self.fem_cut_cell and level_coords is None:
+            raise ValueError("fem_cut_cell needs level_coords")
 
         # Lumped-mass dual-cell areas per level (FE quadrature weights).
         # α is mesh geometry (per-triangle / per-vertex area) and MUST match
@@ -609,9 +756,13 @@ class MultiscaleGNNScoreNetwork(nn.Module):
                           f"{[f'{r:.4f}' for r in level_radii]} ", end="")
                 self._precomp_edge_indices = []
                 for lvl in range(self.n_levels):
-                    c = level_coords[lvl].float()
-                    n = n_nodes_list[lvl]
-                    eik, _ = _compute_knn_edges(c, n, level_radii[lvl])
+                    if self.fem_cut_cell:
+                        eik = self._cut_cell_level(lvl, n_nodes_list[lvl], cells_list, xy_list,
+                                                   level_radii[lvl])
+                    else:
+                        c = level_coords[lvl].float()
+                        n = n_nodes_list[lvl]
+                        eik, _ = _compute_knn_edges(c, n, level_radii[lvl])
                     self._precomp_edge_indices.append(eik)
                     print(f"L{lvl}:{eik.shape[1]} ", end="", flush=True)
                 print("done")
@@ -669,7 +820,9 @@ class MultiscaleGNNScoreNetwork(nn.Module):
         # once per set_mesh_hierarchy call and reuse on the hot path.
         # ────────────────────────────────────────────────────────────────────
         self._cached_edge_attr = None
-        if self.use_edge_geom and level_coords is not None:
+        if self._cut_cell_attr is not None:
+            self._cached_edge_attr = self._cut_cell_attr
+        elif self.use_edge_geom and level_coords is not None:
             _device = next(self.parameters()).device
             self._cached_edge_attr = []
             for lvl in range(self.n_levels):
@@ -704,6 +857,27 @@ class MultiscaleGNNScoreNetwork(nn.Module):
             self._level_log_areas = torch.tensor(log_areas, dtype=torch.float32, device=device)
             print(f"ResolutionFiLM: log_areas = {[f'{a:.3f}' for a in log_areas]}")
 
+        # Linear prolongation (unpool_interp): barycentric weights from each coarser level's
+        # node positions to the next finer level's, instead of copying the parent's value.
+        self._unpool_P = None
+        if self.unpool_interp and level_coords is not None:
+            device = next(self.parameters()).device
+            # vertex-centred meshes (e.g. pinball) have holes: interpolate inside the domain;
+            # unpool_in_domain does so on the cell-centred meshes too (the blob notches and holes)
+            _np = lambda a: torch.as_tensor(a).detach().cpu().numpy()
+            have_mesh = (cells_list is not None and xy_list is not None
+                         and cells_list[0] is not None and xy_list[0] is not None)
+            if self.unpool_in_domain and not have_mesh:
+                raise ValueError("unpool_in_domain needs the finest level's triangles (cells_list, xy_list)")
+            in_domain = have_mesh and (self.unpool_in_domain or len(xy_list[0]) == n_nodes_list[0])
+            self._unpool_P = [
+                (_interp_matrix_in_domain(_np(level_coords[l + 1]), _np(level_coords[l]),
+                                          (_np(xy_list[0]), _np(cells_list[0])), _np(unpool_maps[l]))
+                 if in_domain else
+                 _interp_matrix(torch.as_tensor(level_coords[l + 1]).cpu(),
+                                torch.as_tensor(level_coords[l]).cpu())).to(device)
+                for l in range(self.n_levels - 1)]
+
         if self.use_latent_transformer and self.latent_transformer is None:
             # Only create once — subsequent set_mesh_hierarchy calls must not
             # destroy learned weights. When domain heads are active the
@@ -722,6 +896,27 @@ class MultiscaleGNNScoreNetwork(nn.Module):
             )
             device = next(self.parameters()).device
             self.latent_transformer = self.latent_transformer.to(device)
+
+    def _cut_cell_level(self, lvl, n_nodes, cells_list, xy_list, radius):
+        """Cut-cell edges of one level (fem_cut_cell): caches their attributes, returns
+        the edge index. Needs the level's triangles; the model's nodes are either the
+        triangles (cell-centred: the blob meshes) or the vertices (e.g. pinball)."""
+        cells = None if cells_list is None else cells_list[lvl]
+        xy = None if xy_list is None else xy_list[lvl]
+        if cells is None or xy is None:
+            raise ValueError(f"fem_cut_cell: level {lvl} needs its triangles (cells_list, xy_list)")
+        if len(cells) == n_nodes:
+            nodes = 'cells'
+        elif len(xy) == n_nodes:
+            nodes = 'vertices'
+        else:
+            raise ValueError(f"fem_cut_cell: level {lvl} has {n_nodes} nodes but {len(cells)} "
+                             f"triangles and {len(xy)} vertices")
+        layer = next(l for b in self._all_mp_blocks() for l in b.layers)
+        ei, ea = _compute_cut_cell_edges(xy, cells, radius, 2.0 * radius,
+                                         layer.fem_basis_type, layer.patch_resolution, nodes=nodes)
+        self._cut_cell_attr.append(ea.to(next(self.parameters()).device))
+        return ei
 
     @staticmethod
     def _batch_ei(edge_index, n_nodes, B, device):
@@ -747,18 +942,13 @@ class MultiscaleGNNScoreNetwork(nn.Module):
         return pool_mlp(h_coarse).reshape(B, n_coarse, H)
 
     def _unpool(self, h_coarse, h_skip, unpool_map, unpool_mlp, device):
-        B, N_fine, H = h_skip.shape
-        N_coarse = h_coarse.shape[1]
-        umap = unpool_map.to(device)
-
-        h_flat = h_coarse.reshape(-1, H)
-        off = torch.arange(B, device=device) * N_coarse
-        idx = (umap.unsqueeze(0) + off.unsqueeze(1)).reshape(-1)
-        h_bc = h_flat[idx].reshape(B, N_fine, H)
-
+        h_bc = _prolong(h_coarse, unpool_map, device)
         return unpool_mlp(torch.cat([h_bc, h_skip], dim=-1))
 
     def _edge_attr(self, level, B, device, ei_override=None):
+        if self._cut_cell_attr is not None:          # per edge, built with the edges
+            ea = self._cut_cell_attr[level].to(device)
+            return ea.repeat(B, 1) if B > 1 else ea
         if not self.use_edge_geom or self._level_coords is None:
             return None
         # Hot path: use the per-level cache built in set_mesh_hierarchy.
@@ -861,11 +1051,11 @@ class MultiscaleGNNScoreNetwork(nn.Module):
             h = self.domain_decoder_head(h, h_coarse_skip, domain_onehot)  # [B, N_coarse, H]
 
         for level in range(self.n_levels - 2, -1, -1):
+            umap = self._unpool_P[level] if self._unpool_P is not None else self._unpool_maps[level]
             if self.pooling_type in ('learned_pool', 'learned_res'):
-                h = self.unpool_layers[level](h, skips[level], self._unpool_maps[level], device)
+                h = self.unpool_layers[level](h, skips[level], umap, device)
             else:
-                h = self._unpool(h, skips[level], self._unpool_maps[level],
-                                 self.unpool_mlps[level], device)
+                h = self._unpool(h, skips[level], umap, self.unpool_mlps[level], device)
             h = self._pos_reinject(h, level, B)
             n_l = self._n_nodes_list[level]
             if use_precomp:

@@ -23,16 +23,47 @@ model:
   fem_k_hops: 2
   fem_use_radius: true
   fem_radius_mult: 2.0
+  fem_lumped_mass: true
   knn_radius_mult: 3.0
   fno_n_modes: 16
   fno_n_layers: 4
+  fno_pos_enc: none
+  fno_pad: 0.0
   cnn_double_conv: false
   cnn_residual: false
   cnn_bottleneck_attn: false
   cnn_strided_down: false
   cnn_dropout: 0.0
-  film_time_cond: false
+  gaot_latent_tokens_size:
+  - 32
+  - 32
+  gaot_patch_size: 2
+  gaot_n_transformer_layers: 3
+  gaot_magno_radius: 0.05
+  gaot_magno_hidden: 64
+  gaot_magno_mlp_layers: 3
+  gaot_magno_lifting: 64
+  gaot_positional_embedding: absolute
+  gaot_use_geoembed: true
+  gaot_use_attention: true
+  gaot_use_torch_scatter: false
+  geofno_modes: 12
+  geofno_latent: 32
+  geofno_iphi_width: 32
+  mino_n_latent_tokens: 256
+  mino_n_transformer_layers: 4
+  mino_n_transformer_heads: 4
+  mino_gno_radius: 0.05
+  mino_gno_hidden: 64
+  mino_gno_mlp_layers: 3
+  film_time_cond: true
   res_invariant: true
+  res_film_per_node: false
+  fem_cut_cell: true
+  unpool_interp: true
+  fem_lumped_norm: true
+  fem_wall_signal: false
+  fem_lumped_ball_norm: false
   use_domain_heads: false
   n_latent: 100
   n_domains: 8
@@ -54,6 +85,8 @@ data:
   nx: 32
   ny: 32
   num_samples: 5000
+  max_nodes: 6000
+  jeb_exact_volumes: false
   max_numInc: 3
   backCond: 1.0
   data_dir: data
@@ -65,19 +98,24 @@ data:
   ms_res_dirs: ''
   ms_all_res_dirs: ''
   n_cond_channels: 0
+  n_channels: 1
+  coords_dim: 2
+  use_boundary_channel: true
   enc_use_mu: true
   enc_use_time: true
   land_mask_path: ''
   knn_k: 0
   hierarchy_path: ''
+  graded_pattern: ''
 training:
   num_epochs: 250
+  grad_accum: 1
   lr: 0.001
   batch_size: 32
   save_dir: exp
   log_wandb: false
   use_wandb: false
-  wandb_entity: ""
+  wandb_entity: ''
   wandb_project: grifdir
   num_workers: 4
   pin_memory: false
@@ -87,6 +125,6 @@ training:
   data_config: baseline
   vis_every: 50
   ckpt_every: 50
-  gen_eval_every: 125
+  gen_eval_every: 100
   area_weighted_loss: false
   multires_eval_specs: []

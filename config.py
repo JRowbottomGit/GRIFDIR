@@ -64,6 +64,12 @@ class ModelConfig:
     gaot_use_torch_scatter: bool = False  # use torch_scatter if installed; otherwise wrapper's scatter_reduce fallback
     film_time_cond: bool = False     # FiLM scale+shift timestep conditioning at every V-cycle level
     res_invariant: bool = False      # shared GNN weights + ResolutionFiLM conditioning on log(cell area)
+    fem_cut_cell: bool = False       # lumped radius FEM conv: weight each cell by its area inside the ball, kernel averaged over that piece
+    unpool_interp: bool = False      # unpool by linear interpolation of coarse values at fine nodes, not copy-to-children
+    unpool_in_domain: bool = False   # unpool_interp on cell-centred meshes: drop interpolation triangles that leave the domain (holes, notches)
+    fem_lumped_norm: bool = False    # lumped FEM conv: divide by the ball's area inside the domain (area-weighted mean, no drop at walls)
+    fem_wall_signal: bool = False    # lumped radius FEM conv: add a learned vector x the share of the ball outside the domain (zero-init)
+    fem_lumped_ball_norm: bool = False  # lumped radius FEM conv: divide by the full ball's area (zero padding at mean scale); alternative to fem_lumped_norm
     use_domain_heads: bool = False   # cross-attention domain encoder/decoder at bottleneck (multi-domain)
     n_latent: int = 100              # M — fixed number of latent tokens when use_domain_heads=True
     n_domains: int = 8               # dimension of domain one-hot vector

@@ -535,6 +535,12 @@ def train(cfg: Config, resume_run_id: str = None):
                     knn_radius_mult=getattr(cfg.model, 'knn_radius_mult', 3.0),
                     film_time_cond=getattr(cfg.model, 'film_time_cond', False),
                     res_invariant=getattr(cfg.model, 'res_invariant', False),
+                    fem_cut_cell=getattr(cfg.model, 'fem_cut_cell', False),
+                    unpool_interp=getattr(cfg.model, 'unpool_interp', False),
+                    unpool_in_domain=getattr(cfg.model, 'unpool_in_domain', False),
+                    fem_lumped_norm=getattr(cfg.model, 'fem_lumped_norm', False),
+                    fem_wall_signal=getattr(cfg.model, 'fem_wall_signal', False),
+                    fem_lumped_ball_norm=getattr(cfg.model, 'fem_lumped_ball_norm', False),
                     use_domain_heads=cfg.model.use_domain_heads,
                     n_latent=cfg.model.n_latent,
                     n_domains=cfg.model.n_domains,
@@ -1030,6 +1036,17 @@ if __name__ == "__main__":
     parser.add_argument('--knn_radius_mult', type=float, default=3.0)
     parser.add_argument('--film_time_cond', type=t_or_f, default=False)
     parser.add_argument('--res_invariant', type=t_or_f, default=False)
+    # Lumped radius FEM conv: each cell weighted by its area inside the ball, kernel averaged over it
+    parser.add_argument('--fem_cut_cell', type=t_or_f, default=False)
+    # Unpool by linear interpolation of coarse values at fine nodes instead of copying the parent
+    parser.add_argument('--unpool_interp', type=t_or_f, default=False)
+    parser.add_argument('--unpool_in_domain', type=t_or_f, default=False)
+    # Lumped FEM conv divided by the ball's area inside the domain (area-weighted mean)
+    parser.add_argument('--fem_lumped_norm', type=t_or_f, default=False)
+    # Lumped radius FEM conv: learned vector x the share of the ball outside the domain
+    parser.add_argument('--fem_wall_signal', type=t_or_f, default=False)
+    # Lumped radius FEM conv divided by the full ball's area (zero padding at mean scale)
+    parser.add_argument('--fem_lumped_ball_norm', type=t_or_f, default=False)
     # FNO
     parser.add_argument('--fno_n_modes', type=int, default=16)
     parser.add_argument('--fno_n_layers', type=int, default=4)
@@ -1169,6 +1186,12 @@ if __name__ == "__main__":
         cfg.model.knn_radius_mult = args.knn_radius_mult
         cfg.model.film_time_cond = args.film_time_cond
         cfg.model.res_invariant = args.res_invariant
+        cfg.model.fem_cut_cell = args.fem_cut_cell
+        cfg.model.unpool_interp = args.unpool_interp
+        cfg.model.unpool_in_domain = args.unpool_in_domain
+        cfg.model.fem_lumped_norm = args.fem_lumped_norm
+        cfg.model.fem_wall_signal = args.fem_wall_signal
+        cfg.model.fem_lumped_ball_norm = args.fem_lumped_ball_norm
         cfg.model.fno_n_modes = args.fno_n_modes
         cfg.model.fno_n_layers = args.fno_n_layers
         cfg.model.fno_pos_enc = args.fno_pos_enc

@@ -62,7 +62,8 @@ The pinball flow data was generated with [SHRED-ROM](https://github.com/MatteoTo
 python train.py \
     --domain square --conv_type multiscale --layer_type fem_conv \
     --fem_use_radius True --fem_radius_mult 2.0 --fem_basis_type p1 --fem_k_hops 2 \
-    --fem_lumped_mass True --mixing_type vector \
+    --fem_lumped_mass True --fem_cut_cell True --unpool_interp True --fem_lumped_norm True \
+    --res_invariant True --mixing_type vector \
     --hidden_dim 128 --num_layers 4 --use_latent_transformer True \
     --pooling_type learned_res --use_edge_geom True --use_pos_reinject True --film_time_cond True \
     --sde_type ve --sigma_data 0.5 \
@@ -96,6 +97,23 @@ python evaluate.py sensor_sweep --task pinball_reconstruction --run_dir checkpoi
 ```
 
 `python evaluate.py <task> --help` for task-specific flags.
+
+### Quadrature and prolongation options
+
+The FEM convolution integrates a learned kernel over a physical ball around each node, with quadrature weights computed from the mesh. These training options control that quadrature and the coarse-to-fine transfer; all are off by default. The released blob and pinball checkpoints use `--fem_cut_cell`, `--unpool_interp` and `--fem_lumped_norm`; the multidomain checkpoint uses none of them.
+
+| Flag | What it does |
+|---|---|
+| `--fem_cut_cell True` | Weights each neighbouring cell by its area inside the ball (the node's own cell included) and averages the kernel over that piece. On vertex-centred meshes such as pinball, each vertex is weighted by the integral of its hat function over the ball. Needs `--fem_lumped_mass True --fem_use_radius True`. |
+| `--unpool_interp True` | Transfers coarse features to the finer level by linear (barycentric) interpolation, which reproduces linear fields. On vertex-centred meshes with holes, interpolation triangles that leave the domain are dropped. |
+| `--unpool_in_domain True` | Applies the same domain check on cell-centred meshes (the holes and notches of the irregular domains). Needs `--unpool_interp True`. |
+| `--fem_lumped_norm True` | Divides the lumped sum by the ball's area inside the domain: an area-weighted mean, so a constant field is unchanged at walls. Needs `--fem_lumped_mass True`. |
+| `--fem_lumped_ball_norm True` | Divides the lumped sum by the full ball's area: zero padding at the scale of a mean. An alternative to `--fem_lumped_norm`. |
+| `--fem_wall_signal True` | Adds a learned vector (zero at initialisation) times the share of the ball outside the domain, giving the network the wall position separately from the field. Typically combined with `--fem_lumped_norm`. |
+
+For comparison, in neuraloperator 2.0 the DISCO convolution takes quadrature weights as a caller-supplied input for unstructured point clouds, and the library's models use its equidistant-grid variant.
+
+`tests/test_mesh_transfer_flags.py`, `tests/test_vertex_mesh_flags.py` and `tests/test_lumped_norm.py` check these options numerically.
 
 ---
 
